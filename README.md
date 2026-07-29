@@ -120,6 +120,22 @@ is committed.
   never given a city name — see the `places` grouping in `export.py`.
 - **Engagement starts 2026-07-29.** Before that, `dwellMs` and `maxScroll` do
   not exist, so those tiles read zero for older windows.
-- **`human` means no automation signals**, not a verified person. `self` is
-  South Africa, localhost, or a denylisted test session.
+- **`human` means no automation signals**, not a verified person.
+- **`self` is your *city*, localhost, or a denylisted test session** —
+  `HOME_CITIES` in `export.py`. It was a whole country (`{"ZA"}`) until
+  2026-07-29, which swallowed the friends in Pretoria and Johannesburg who
+  actually downloaded the plugin: human downloads read 1 when the true figure
+  was 3. A country is not one person.
+
+  The cost of city-level attribution is that **anyone else in Cape Town is
+  still counted as you**. On the data as of 2026-07-29 that is roughly two
+  sessions and one download — a macOS 1728×1117 machine that has never
+  appeared on localhost. If that ever matters more than the convenience,
+  narrow `self` to a device allowlist instead; the fingerprints that have
+  browsed localhost are provably yours.
+- **Verdicts are ordered: certainty, then evidence, then geography.** Location
+  is checked *last*. It used to be checked first, which meant a crawler that
+  resolved to your own city was filed as you and never tested for automation —
+  that is how a burst of link-preview bots (triggered by a friend sharing the
+  URL in Microsoft Teams) was counted as you browsing your own site.
 - Site analytics start 2026-07-17; releases predate them.

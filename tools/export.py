@@ -55,9 +55,14 @@ PROJECT = "remidsp-98208"
 GH_REPO = "frankAwesome/remi-amps-downloads"
 SITE = "remidsp.com"
 
-# Traffic to treat as your own. Cape Town dev browsing + the headless QA runs
-# are the bulk of the database; without this the numbers flatter you.
-HOME_COUNTRIES = {"ZA"}
+# Traffic to treat as your own. Your dev browsing and headless QA runs are the
+# bulk of the database; without this the numbers flatter you.
+#
+# This is a CITY, not a country. It used to be {"ZA"}, which quietly swallowed
+# every South African visitor — including the friends in Pretoria and
+# Johannesburg who actually downloaded the plugin. A whole country is not one
+# person. Lowercase; compared case-insensitively.
+HOME_CITIES = {"cape town"}
 BOT_UA = re.compile(r"bot|crawl|spider|headless|phantom|lighthouse", re.I)
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
 SESSION_DENYLIST = {"s_rulesprobe"}       # rules-verification writes, not visits
@@ -386,19 +391,37 @@ def session_signals(docs):
 
 
 def classify(docs):
+    """One verdict for one session, weakest evidence considered last.
+
+    Order matters and used to be wrong. Location was checked first, so a
+    crawler that resolved to your own city was filed as you and never even
+    tested for automation — which is how a burst of link-preview bots hitting
+    Johannesburg ended up counted as the site owner browsing his own page.
+
+    Certain facts first (a test session, a localhost host), then actual
+    evidence of automation, and only then geography — which is a guess about
+    who someone is, not an observation about what they did.
+    """
     first = docs[0]
+
+    # ── certain ──
     if first.get("session") in SESSION_DENYLIST:
         return SELF, ["denylisted test session"]
-    if ((first.get("geo") or {}).get("country")) in HOME_COUNTRIES:
-        return SELF, ["home country %s" % (first.get("geo") or {}).get("country")]
     if any((d.get("page") or {}).get("host") in LOCAL_HOSTS for d in docs):
         return SELF, ["localhost"]
 
+    # ── evidence ──
     hard, soft = session_signals(docs)
     if hard:
         return AUTOMATED, hard + soft
     if len(soft) >= 2:
         return AUTOMATED, soft
+
+    # ── geography, the weakest of the three ──
+    geo = next((d.get("geo") or {} for d in docs if (d.get("geo") or {}).get("country")), {})
+    if (geo.get("city") or "").strip().lower() in HOME_CITIES:
+        return SELF, ["home city %s" % geo.get("city")] + soft
+
     return HUMAN, soft or ["no anomalies"]
 
 
