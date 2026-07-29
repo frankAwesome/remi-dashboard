@@ -1,0 +1,11 @@
+# Plaintext metrics must never be committed — the whole point is that the host
+# only ever sees ciphertext.
+data/metrics.json
+*.plain.json
+
+# Cached Natural Earth source for tools/build_world.py (~800 KB); the generated
+# js/world.js and tools/centroids.py are committed instead.
+tools/.ne110m.geojson
+
+.DS_Store
+__pycache__/

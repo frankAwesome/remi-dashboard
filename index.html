@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>REMI DSP — Metrics</title>
+<meta name="robots" content="noindex,nofollow">
+<meta name="description" content="Private metrics dashboard for remidsp.com.">
+<link rel="icon" href="favicon.ico">
+<link rel="stylesheet" href="css/dash.css">
+</head>
+<body>
+
+<div class="bg"><div class="bg__grain"></div></div>
+<div class="hud" aria-hidden="true">
+  <span class="hud__corner hud__corner--tl"></span>
+  <span class="hud__corner hud__corner--tr"></span>
+  <span class="hud__corner hud__corner--bl"></span>
+  <span class="hud__corner hud__corner--br"></span>
+</div>
+
+<!-- ════════ lock ════════ -->
+<div class="lock" id="lock">
+  <div class="lock__inner">
+    <div class="lock__mark">
+      <img src="assets/img/logo-mark.png" width="30" height="24" alt="">
+      <span>REMI DSP</span>
+    </div>
+    <h1>Metrics</h1>
+    <p>This page is served from a public host. The numbers behind it are not —
+       they arrive encrypted and are opened here, in this tab.</p>
+    <form class="lock__row" id="lockForm">
+      <input id="pp" type="password" placeholder="PASSPHRASE" autocomplete="current-password"
+             autofocus spellcheck="false" aria-label="Passphrase">
+      <button class="lock__go" type="submit">Unlock</button>
+    </form>
+    <p class="lock__err" id="lockErr" role="alert"></p>
+    <p class="lock__note">
+      AES-256-GCM · PBKDF2-SHA256 · decrypted in-browser<br>
+      The passphrase is never sent anywhere, and is forgotten when this tab closes.
+    </p>
+  </div>
+</div>
+
+<!-- ════════ dashboard ════════ -->
+<div id="app" hidden>
+
+<nav class="nav">
+  <div class="nav__in">
+    <div class="nav__mark">
+      <span>REMI DSP</span><small>METRICS</small>
+    </div>
+
+    <div class="seg" id="scope" role="group" aria-label="Traffic scope">
+      <button data-scope="human"     aria-pressed="true">Human <b></b></button>
+      <button data-scope="automated" aria-pressed="false">Bots <b></b></button>
+      <button data-scope="self"      aria-pressed="false">Mine <b></b></button>
+      <button data-scope="all"       aria-pressed="false">All <b></b></button>
+    </div>
+
+    <div class="nav__spacer"></div>
+    <p class="nav__meta">
+      <b id="mWindow">—</b><br>
+      built <span id="mGenerated">—</span>
+    </p>
+  </div>
+</nav>
+
+<main>
+
+  <!-- ── 01 headline ── -->
+  <section id="s-top">
+    <header class="shead">
+      <span class="shead__no led">01</span>
+      <span class="kicker">The count</span>
+      <span class="shead__meta" id="mScopeNote">—</span>
+    </header>
+
+    <div class="grid grid--4">
+      <div class="stat">
+        <p class="stat__label">Installers fetched</p>
+        <p class="stat__value led" id="kRelease">0</p>
+        <p class="stat__note" id="kReleaseNote">—</p>
+      </div>
+      <div class="stat">
+        <p class="stat__label">Download clicks</p>
+        <p class="stat__value led" id="kDownloads">0</p>
+        <p class="stat__note" id="kDownloadsNote">—</p>
+        <div class="stat__spark" id="kDownloadsSpark"></div>
+      </div>
+      <div class="stat">
+        <p class="stat__label">Pageviews</p>
+        <p class="stat__value led" id="kPageviews">0</p>
+        <p class="stat__note" id="kPageviewsNote">—</p>
+        <div class="stat__spark" id="kPageviewsSpark"></div>
+      </div>
+      <div class="stat">
+        <p class="stat__label">Link clicks</p>
+        <p class="stat__value led" id="kClicks">0</p>
+        <p class="stat__note" id="kClicksNote">—</p>
+        <div class="stat__spark" id="kClicksSpark"></div>
+      </div>
+    </div>
+
+    <div class="grid grid--4" style="margin-top:1px">
+      <div class="stat">
+        <p class="stat__label">Sessions</p>
+        <p class="stat__value stat__value--sm led" id="kSessions">0</p>
+        <p class="stat__note" id="kSessionsNote">—</p>
+      </div>
+      <div class="stat">
+        <p class="stat__label">Download rate</p>
+        <p class="stat__value stat__value--sm led" id="kRate">0</p>
+        <p class="stat__note">Share of sessions that took an installer.</p>
+      </div>
+      <div class="stat">
+        <p class="stat__label">Median attention</p>
+        <p class="stat__value stat__value--sm led" id="kDwell">0</p>
+        <p class="stat__note">Time the page was actually visible.</p>
+      </div>
+      <div class="stat">
+        <p class="stat__label">Read through</p>
+        <p class="stat__value stat__value--sm led" id="kScroll">0</p>
+        <p class="stat__note" id="kScrollNote">—</p>
+        <div class="meter"><i id="kScrollMeter" style="width:0"></i></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 02 map ── -->
+  <section id="s-map">
+    <header class="shead">
+      <span class="shead__no led">02</span>
+      <span class="kicker">Where</span>
+      <span class="shead__meta" id="mMapNote">—</span>
+    </header>
+
+    <div class="grid grid--map">
+      <div>
+        <div class="map" id="map"></div>
+        <div class="maplegend">
+          <span><i class="dl"></i>DOWNLOAD</span>
+          <span><i class="pv"></i>PAGEVIEW</span>
+          <span><i class="ap"></i>COUNTRY ONLY — APPROXIMATE</span>
+          <span class="nav__spacer"></span>
+          <div class="seg" id="mapMetric" role="group" aria-label="Map metric">
+            <button data-metric="downloads" aria-pressed="true">Downloads</button>
+            <button data-metric="pageviews" aria-pressed="false">Pageviews</button>
+          </div>
+        </div>
+      </div>
+      <div class="cell">
+        <h3>Countries</h3>
+        <div id="countries" style="margin-top:1rem"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 03 over time ── -->
+  <section id="s-time">
+    <header class="shead">
+      <span class="shead__no led">03</span>
+      <span class="kicker">Over time</span>
+      <span class="shead__meta">DAILY · VISITOR LOCAL HOURS</span>
+    </header>
+
+    <div class="grid grid--map">
+      <div class="cell">
+        <div id="chart"></div>
+        <div class="legend">
+          <span><i class="pv"></i>PAGEVIEWS</span>
+          <span><i class="dl"></i>DOWNLOADS</span>
+        </div>
+      </div>
+      <div class="cell">
+        <h3>Hour of day</h3>
+        <p class="stat__note" style="margin-top:.5rem">
+          In each visitor's own timezone — when they were awake, not when you were.</p>
+        <div id="hours" style="margin-top:1.1rem"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 04 arrival ── -->
+  <section id="s-arrive">
+    <header class="shead">
+      <span class="shead__no led">04</span>
+      <span class="kicker">How they arrived</span>
+      <span class="shead__meta">REFERRER · CAMPAIGN</span>
+    </header>
+    <div class="grid grid--3">
+      <div class="cell"><h3>Referrers</h3><div id="referrers" style="margin-top:1rem"></div></div>
+      <div class="cell"><h3>Campaigns</h3><div id="campaigns" style="margin-top:1rem"></div></div>
+      <div class="cell"><h3>Deepest section</h3><div id="sections" style="margin-top:1rem"></div></div>
+    </div>
+  </section>
+
+  <!-- ── 05 behaviour ── -->
+  <section id="s-do">
+    <header class="shead">
+      <span class="shead__no led">05</span>
+      <span class="kicker">What they did</span>
+      <span class="shead__meta">CLICKS · PLACEMENT</span>
+    </header>
+    <div class="grid grid--3">
+      <div class="cell"><h3>Links clicked</h3><div id="clickLabels" style="margin-top:1rem"></div></div>
+      <div class="cell"><h3>Click placement</h3><div id="clickPlacements" style="margin-top:1rem"></div></div>
+      <div class="cell"><h3>Download placement</h3><div id="dlPlacements" style="margin-top:1rem"></div></div>
+    </div>
+  </section>
+
+  <!-- ── 06 machines ── -->
+  <section id="s-device">
+    <header class="shead">
+      <span class="shead__no led">06</span>
+      <span class="kicker">What they run</span>
+      <span class="shead__meta">PLATFORM · BROWSER</span>
+    </header>
+    <div class="grid grid--3">
+      <div class="cell"><h3>Platform</h3><div id="platforms" style="margin-top:1rem"></div></div>
+      <div class="cell"><h3>Browser</h3><div id="browsers" style="margin-top:1rem"></div></div>
+      <div class="cell"><h3>Installer taken</h3><div id="downloadOs" style="margin-top:1rem"></div></div>
+    </div>
+  </section>
+
+  <!-- ── 07 releases ── -->
+  <section id="s-rel">
+    <header class="shead">
+      <span class="shead__no led">07</span>
+      <span class="kicker">Releases</span>
+      <span class="shead__meta" id="mRelNote">—</span>
+    </header>
+    <div class="cell" style="background:var(--panel);padding:0">
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>Tag</th><th>Published</th>
+            <th class="n">macOS</th><th class="n">Windows</th><th class="n">Total</th><th></th>
+          </tr></thead>
+          <tbody id="releases"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 08 download log ── -->
+  <section id="s-log">
+    <header class="shead">
+      <span class="shead__no led">08</span>
+      <span class="kicker">Download log</span>
+      <span class="shead__meta">MOST RECENT FIRST</span>
+    </header>
+    <div class="cell" style="background:var(--panel);padding:0">
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>When</th><th>OS</th><th>Asset</th><th>Where</th>
+            <th>Placement</th><th>Verdict</th>
+          </tr></thead>
+          <tbody id="log"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <ul>
+    <li>Ad blockers drop <code>firestore.googleapis.com</code>, so site numbers are a
+        floor — expect 10–30% low for this audience.</li>
+    <li>A download row is a click on the installer link. The release counter above
+        it is the one that saw the bytes move.</li>
+    <li>Site analytics start 2026-07-17; releases predate them. Coordinates start
+        2026-07-29 — earlier rows sit on their country centroid.</li>
+    <li><em>Human</em> means no automation signals, not a verified person.
+        <em>Mine</em> is South Africa, localhost or a test session.</li>
+  </ul>
+  <p>
+    <a href="https://remidsp.com">remidsp.com</a><br>
+    <span id="mFooter">—</span><br>
+    <button id="lockBtn" style="color:var(--muted);border-bottom:1px solid var(--line-2)">Lock</button>
+  </p>
+</footer>
+
+</div>
+
+<script type="module" src="js/dash.js"></script>
+</body>
+</html>

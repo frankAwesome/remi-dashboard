@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""
+Bake the world map into the dashboard.
+
+Run once (or whenever you want to re-simplify). Reads Natural Earth 110m
+country polygons and writes two generated files:
+
+  js/world.js       SVG path data per country, equirectangular, ready to draw
+  tools/centroids.py  ISO-3166-2 -> (lat, lon), for rows with no coordinates
+
+Both are committed. The dashboard fetches nothing at runtime: no tile server,
+no CDN, no third party watching who reads your metrics. It also means the map
+looks like the rest of the site instead of like Google Maps.
+
+    python3 tools/build_world.py
+
+Stdlib only.
+"""
+
+import json
+import math
+import os
+import sys
+import urllib.request
+
+SRC = ("https://raw.githubusercontent.com/nvkelso/natural-earth-vector/"
+       "master/geojson/ne_110m_admin_0_countries.geojson")
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+
+# Equirectangular, clipped north of Antarctica. 360 wide keeps x = lon + 180,
+# so the projection is legible at a glance instead of being a magic constant.
+LAT_MAX, LAT_MIN = 85.0, -60.0
+W = 360.0
+H = LAT_MAX - LAT_MIN
+
+EPSILON = 0.30      # Douglas-Peucker tolerance, degrees
+MIN_AREA = 0.45     # drop islands smaller than this (square degrees)
+
+
+def project(lon, lat):
+    return (lon + 180.0, LAT_MAX - max(min(lat, LAT_MAX), LAT_MIN))
+
+
+def perp(p, a, b):
+    (x, y), (x1, y1), (x2, y2) = p, a, b
+    dx, dy = x2 - x1, y2 - y1
+    if dx == 0 and dy == 0:
+        return math.hypot(x - x1, y - y1)
+    t = max(0.0, min(1.0, ((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy)))
+    return math.hypot(x - (x1 + t * dx), y - (y1 + t * dy))
+
+
+def simplify(pts, eps):
+    """Douglas-Peucker, iterative so a big ring cannot blow the stack."""
+    if len(pts) < 3:
+        return pts
+    keep = [False] * len(pts)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(pts) - 1)]
+    while stack:
+        lo, hi = stack.pop()
+        worst, at = 0.0, -1
+        for i in range(lo + 1, hi):
+            d = perp(pts[i], pts[lo], pts[hi])
+            if d > worst:
+                worst, at = d, i
+        if at >= 0 and worst > eps:
+            keep[at] = True
+            stack.append((lo, at))
+            stack.append((at, hi))
+    return [p for p, k in zip(pts, keep) if k]
+
+
+def ring_area(ring):
+    """Shoelace, absolute — used only to rank/keep polygons."""
+    s = 0.0
+    for i in range(len(ring)):
+        x1, y1 = ring[i]
+        x2, y2 = ring[(i + 1) % len(ring)]
+        s += x1 * y2 - x2 * y1
+    return abs(s) / 2.0
+
+
+def centroid(ring):
+    """Area centroid of a ring in lon/lat."""
+    cx = cy = a = 0.0
+    for i in range(len(ring)):
+        x1, y1 = ring[i]
+        x2, y2 = ring[(i + 1) % len(ring)]
+        cross = x1 * y2 - x2 * y1
+        a += cross
+        cx += (x1 + x2) * cross
+        cy += (y1 + y2) * cross
+    if a == 0:
+        xs = [p[0] for p in ring]
+        ys = [p[1] for p in ring]
+        return sum(xs) / len(xs), sum(ys) / len(ys)
+    a *= 0.5
+    return cx / (6 * a), cy / (6 * a)
+
+
+def polygons(geom):
+    if geom["type"] == "Polygon":
+        return [geom["coordinates"]]
+    if geom["type"] == "MultiPolygon":
+        return geom["coordinates"]
+    return []
+
+
+def fmt(v):
+    return ("%.2f" % v).rstrip("0").rstrip(".")
+
+
+def main():
+    cache = os.path.join(HERE, ".ne110m.geojson")
+    if os.path.exists(cache):
+        data = json.load(open(cache))
+    else:
+        sys.stderr.write("fetching Natural Earth 110m ...\n")
+        raw = urllib.request.urlopen(SRC, timeout=120).read()
+        open(cache, "wb").write(raw)
+        data = json.loads(raw)
+
+    countries, centroids = [], {}
+
+    for feat in data["features"]:
+        p = feat["properties"]
+        iso = p.get("ISO_A2_EH") or p.get("ISO_A2") or ""
+        if not iso or iso == "-99":
+            continue
+        name = p.get("NAME") or p.get("ADMIN") or iso
+
+        rings, biggest, biggest_area = [], None, 0.0
+        for poly in polygons(feat["geometry"]):
+            outer = poly[0]                      # holes are invisible at this scale
+            area = ring_area(outer)
+            if area < MIN_AREA:
+                continue
+            if area > biggest_area:
+                biggest_area, biggest = area, outer
+            pts = simplify([project(x, y) for x, y in outer], EPSILON)
+            if len(pts) >= 3:
+                rings.append(pts)
+
+        if not rings:
+            continue
+
+        d = []
+        for ring in rings:
+            d.append("M" + " ".join("%s,%s" % (fmt(x), fmt(y)) for x, y in ring) + "Z")
+        countries.append({"id": iso, "name": name, "d": "".join(d)})
+
+        if biggest:
+            lon, lat = centroid(biggest)
+            centroids[iso] = (round(lat, 2), round(lon, 2))
+
+    countries.sort(key=lambda c: c["id"])
+
+    js = os.path.join(ROOT, "js", "world.js")
+    os.makedirs(os.path.dirname(js), exist_ok=True)
+    with open(js, "w") as f:
+        f.write("/* GENERATED by tools/build_world.py — do not edit by hand.\n"
+                "   Natural Earth 110m, public domain. Equirectangular, clipped to\n"
+                "   %g..%g latitude so Antarctica does not eat half the panel. */\n"
+                % (LAT_MIN, LAT_MAX))
+        f.write('export const VIEWBOX = "0 0 %g %g";\n' % (W, H))
+        f.write("export const LAT_MAX = %g, LAT_MIN = %g;\n\n" % (LAT_MAX, LAT_MIN))
+        f.write("/* lon/lat -> the same projection the paths were baked in. */\n")
+        f.write("export const project = (lon, lat) =>\n"
+                "  [lon + 180, LAT_MAX - Math.max(Math.min(lat, LAT_MAX), LAT_MIN)];\n\n")
+        f.write("export const COUNTRIES = [\n")
+        for c in countries:
+            f.write('  {id:"%s",name:%s,d:"%s"},\n'
+                    % (c["id"], json.dumps(c["name"]), c["d"]))
+        f.write("];\n")
+
+    py = os.path.join(HERE, "centroids.py")
+    with open(py, "w") as f:
+        f.write('"""GENERATED by tools/build_world.py — do not edit by hand.\n\n'
+                'Area centroid of each country\'s largest landmass. Used only to place\n'
+                'rows whose geo lookup returned no coordinates; the dashboard marks\n'
+                'those pins as approximate.\n"""\n\n')
+        f.write("CENTROIDS = {\n")
+        for iso in sorted(centroids):
+            lat, lon = centroids[iso]
+            f.write('    "%s": (%s, %s),\n' % (iso, lat, lon))
+        f.write("}\n")
+
+    size = os.path.getsize(js)
+    sys.stderr.write("wrote %s  (%d countries, %.0f KB)\n"
+                     % (os.path.relpath(js, ROOT), len(countries), size / 1024.0))
+    sys.stderr.write("wrote %s  (%d centroids)\n"
+                     % (os.path.relpath(py, ROOT), len(centroids)))
+
+
+if __name__ == "__main__":
+    main()
