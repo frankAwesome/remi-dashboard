@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 """
-REMI DSP — build the dashboard's data file.
+REMI DSP — the metrics, on the command line.
 
-Reads the two sources that say how remidsp.com is actually doing, aggregates
-them into one small JSON, encrypts it, and writes it where the static page can
-fetch it:
+The dashboard reads Firestore live and does its own aggregation in
+js/aggregate.js, so this script is no longer in that path. It is kept for two
+jobs, both of which still matter:
+
+  * getting the numbers without a browser — in a terminal, over ssh, in a cron
+  * being the reference implementation of the classification and aggregation
+    rules. js/aggregate.js is a deliberate line-for-line port of this file and
+    is verified to produce byte-identical output. Change a rule here, change it
+    there in the same commit.
+
+Reads the two sources that say how remidsp.com is actually doing and aggregates
+them into one JSON:
 
   1. GitHub release asset counters — installers actually fetched, from any
      source, since the first release. Public API; a token only lifts the rate
@@ -21,14 +30,15 @@ runs and a steady drip of scanners dwarf real visitors, so every session is
 classified human / automated / self and the dashboard defaults to human. All
 four scopes are exported; the toggle in the page is a filter, not a refetch.
 
-    python3 tools/export.py                 # encrypted, to data/metrics.enc.json
-    python3 tools/export.py --plain out.json --no-encrypt   # look at it locally
-    python3 tools/export.py --days 30       # only the last month
+    python3 tools/export.py                  # -> data/metrics.json (gitignored)
+    python3 tools/export.py --days 30        # only the last month
+    python3 tools/export.py --encrypt m.enc.json   # archive copy, passphrased
 
 Read-only throughout: it never writes to Firestore, GitHub or the site.
 
-Needs `cryptography` (AES-GCM + the service-account JWT signature); everything
-else is stdlib. `pip install -r tools/requirements.txt`.
+Needs `cryptography` (the service-account JWT signature, and AES-GCM if you
+use --encrypt); everything else is stdlib.
+`pip install -r tools/requirements.txt`.
 """
 
 import argparse
@@ -290,12 +300,23 @@ def parse_ts(raw):
 
 
 def day_of(doc):
+    """Local calendar day, not UTC.
+
+    A "days" axis that silently shifts by a timezone puts evening traffic on
+    tomorrow — in SAST anything after 22:00 would land on the next day's bar.
+    js/aggregate.js does the same thing with the browser's zone.
+    """
     dt = parse_ts(doc.get("ts")) or parse_ts(doc.get("clientTs"))
-    return dt.strftime("%Y-%m-%d") if dt else None
+    return dt.astimezone().strftime("%Y-%m-%d") if dt else None
 
 
 def hour_of(doc):
-    """Hour in the *visitor's* zone — when they were awake, not when you were."""
+    """Hour in the *visitor's* zone — when they were awake, not when you were.
+
+    When the visitor's zone is unknown the fallback is UTC, deliberately: the
+    reader's own local time would make the same document land in a different
+    bar depending on who ran the report. js/aggregate.js matches.
+    """
     dt = parse_ts(doc.get("ts")) or parse_ts(doc.get("clientTs"))
     if not dt:
         return None
@@ -306,7 +327,7 @@ def hour_of(doc):
             return dt.astimezone(ZoneInfo(tz)).hour
         except Exception:
             pass
-    return dt.hour
+    return dt.astimezone(timezone.utc).hour
 
 
 # ── classification ──────────────────────────────────────────────────────────
@@ -461,7 +482,15 @@ def coords(doc):
 # ── aggregation ─────────────────────────────────────────────────────────────
 
 def top(counter, limit=14):
-    return [{"label": k, "n": v} for k, v in counter.most_common(limit)]
+    """Ranked, ties broken by label.
+
+    most_common() leaves ties in insertion order, which is document order and
+    therefore changes as new rows arrive — two labels on 3 hits each would swap
+    places between runs for no reason. Sorting the tie makes the list stable and
+    lets js/aggregate.js produce byte-identical output.
+    """
+    ranked = sorted(counter.items(), key=lambda kv: (-kv[1], str(kv[0])))
+    return [{"label": k, "n": v} for k, v in ranked[:limit]]
 
 
 def browser_of(ua):
@@ -686,20 +715,18 @@ def main():
     ap = argparse.ArgumentParser(description="Build the REMI DSP dashboard data file")
     ap.add_argument("--days", type=int, default=0,
                     help="only look this far back (default: all history)")
-    ap.add_argument("--out", default="data/metrics.enc.json",
-                    help="where the encrypted file goes")
-    ap.add_argument("--plain", metavar="FILE",
-                    help="also write the unencrypted JSON here (do not commit it)")
-    ap.add_argument("--no-encrypt", action="store_true",
-                    help="skip encryption; requires --plain")
+    ap.add_argument("--out", default="data/metrics.json",
+                    help="where the JSON goes (default: data/metrics.json, gitignored)")
+    ap.add_argument("--encrypt", metavar="FILE",
+                    help="also write an AES-256-GCM copy here, for archiving or "
+                         "handing to someone without database access. Needs "
+                         "REMI_DASH_PASSPHRASE. The dashboard does not read this — "
+                         "it reads Firestore live.")
     args = ap.parse_args()
 
-    if args.no_encrypt and not args.plain:
-        die("--no-encrypt needs --plain FILE to write to")
-
     passphrase = os.environ.get("REMI_DASH_PASSPHRASE")
-    if not args.no_encrypt and not passphrase:
-        die("set REMI_DASH_PASSPHRASE (or use --no-encrypt --plain out.json)")
+    if args.encrypt and not passphrase:
+        die("--encrypt needs REMI_DASH_PASSPHRASE set")
 
     since = datetime.now(timezone.utc) - timedelta(days=args.days) if args.days else None
 
@@ -744,21 +771,18 @@ def main():
 
     text = json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
-    if args.plain:
-        os.makedirs(os.path.dirname(os.path.abspath(args.plain)), exist_ok=True)
-        with open(args.plain, "w") as f:
-            f.write(text)
-        sys.stderr.write("wrote %s  (%.0f KB, PLAINTEXT)\n"
-                         % (args.plain, len(text) / 1024.0))
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    with open(args.out, "w") as f:
+        f.write(text)
+    sys.stderr.write("wrote %s  (%.0f KB)\n" % (args.out, len(text) / 1024.0))
 
-    if not args.no_encrypt:
+    if args.encrypt:
         blob = encrypt(text, passphrase)
-        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-        with open(args.out, "w") as f:
+        os.makedirs(os.path.dirname(os.path.abspath(args.encrypt)), exist_ok=True)
+        with open(args.encrypt, "w") as f:
             json.dump(blob, f)
-        sys.stderr.write("wrote %s  (%.0f KB encrypted, from %.0f KB)\n"
-                         % (args.out, os.path.getsize(args.out) / 1024.0,
-                            len(text) / 1024.0))
+        sys.stderr.write("wrote %s  (%.0f KB encrypted)\n"
+                         % (args.encrypt, os.path.getsize(args.encrypt) / 1024.0))
 
     sys.stderr.write("sessions: %d human · %d automated · %d self\n"
                      % (counts[HUMAN], counts[AUTOMATED], counts[SELF]))

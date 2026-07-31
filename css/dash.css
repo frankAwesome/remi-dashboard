@@ -116,8 +116,35 @@ strong{color:#fff;font-weight:600}
   letter-spacing:.16em;font-size:.76rem;padding:0 1.3rem;color:var(--gold);
   transition:color .2s,background .2s}
 .lock__go:hover{background:var(--gold-hi);color:#0a0d12}
+/* Sign-in slab — the same flat white light as the site's primary button. */
+.lock__google{display:inline-flex;align-items:center;gap:.7rem;font-family:var(--font-ui);
+  font-weight:600;text-transform:uppercase;letter-spacing:.12em;font-size:.8rem;
+  padding:.95rem 1.6rem;background:var(--gold-hi);color:#0a0d12;
+  transition:background .25s,box-shadow .3s}
+.lock__google:hover{background:var(--ice);box-shadow:0 0 34px rgba(159,216,232,.3)}
+.lock__google svg{flex:0 0 auto}
+
 .lock__err{margin-top:1rem;font-family:var(--font-mono);font-size:.72rem;letter-spacing:.1em;
   color:var(--red);min-height:1.2em;text-transform:uppercase}
+
+/* Setup instructions — only shown when Firebase says auth is not configured. */
+.lock__setup{margin-top:.6rem;border:1px solid var(--line-2);padding:1.1rem 1.3rem;
+  font-size:.82rem;color:var(--muted);line-height:1.75}
+.lock__setup[hidden]{display:none}
+.lock__setup strong{color:var(--text)}
+.lock__setup ol{margin:.7rem 0 .7rem 1.1rem}
+.lock__setup li{margin-bottom:.5rem}
+.lock__setup a{color:var(--ice);border-bottom:1px solid rgba(159,216,232,.4)}
+.lock__setup a:hover{color:var(--gold-hi)}
+.lock__setup code{font-size:.86em;background:var(--panel);padding:.1rem .35rem}
+
+/* Live indicator — pulses while connected, goes flat when serving from cache. */
+.livedot{display:inline-block;width:6px;height:6px;margin-right:.5rem;vertical-align:1px;
+  background:var(--ice);box-shadow:0 0 8px var(--ice)}
+.livedot[data-state="live"]{animation:pulse 2.4s var(--ease) infinite}
+.livedot[data-state="cache"]{background:var(--muted-2);box-shadow:none;animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.livedot{animation:none}}
 .lock__note{margin-top:2.4rem;font-family:var(--font-mono);font-size:.62rem;letter-spacing:.14em;
   color:var(--muted-2);line-height:1.9}
 

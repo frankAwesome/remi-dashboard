@@ -1,8 +1,8 @@
 # REMI DSP — metrics dashboard
 
-What remidsp.com actually did, on one page, in the site's own design language.
+What remidsp.com is doing, live, in the site's own design language.
 
-**Live:** https://frankawesome.github.io/remi-dashboard/ — passphrase-gated.
+**Live:** https://frankawesome.github.io/remi-dashboard/ — sign in with Google.
 
 Two sources, side by side:
 
@@ -14,78 +14,73 @@ Two sources, side by side:
 Almost none of the raw traffic is a person. Your own browsing, the headless QA
 runs and a steady drip of scanners dwarf real visitors, so every **session** is
 classified `human` / `automated` / `self` and the page opens on human. The
-switch at the top is a filter over data already decrypted, not a refetch.
+switch at the top is a filter over documents already in memory, not a refetch.
 
 ---
+
+## Live, not built
+
+The page subscribes to Firestore with `onSnapshot` and re-renders when a row
+lands. There is no build step, no committed snapshot, and no window during
+which you are looking at yesterday.
+
+`onSnapshot` rather than polling, for two reasons. It is genuinely live — a
+download shows up the moment it happens, not on the next tick — and it is far
+cheaper: Firestore bills the first snapshot in full and then only the documents
+that changed. Polling four collections every five minutes would re-read the
+whole database 288 times a day and exhaust the free tier before lunch.
 
 ## How it stays private
 
-The page is on public GitHub Pages. The numbers are not.
+`firestore.rules` grants **read** to exactly one verified Google account and
+refuses everyone else. The check is server-side on every query, so the public
+API key in the page grants nothing — an unauthenticated read returns
+`403 PERMISSION_DENIED` (verified).
 
-`tools/export.py` encrypts the aggregated JSON with **AES-256-GCM** under a
-**PBKDF2-SHA256** key (310 000 iterations) before it is ever committed, so the
-host only ever serves ciphertext. The page asks for the passphrase and decrypts
-in the tab via WebCrypto — the passphrase is never sent anywhere and is dropped
-when the tab closes.
+Writing stays public and unauthenticated, because a visitor's browser does the
+writing. Reading was previously blocked outright; going live is the one thing
+that required opening it, and it was opened as narrowly as the rules allow.
 
-A wrong passphrase fails GCM's authentication tag. There is no separate check to
-get wrong and no way to half-decrypt.
+Adding a second reader is one more address in `dashboardReader()` in
+`remidsp-site/firestore.rules`.
 
-**Firestore reads stay blocked from the browser**, which is the point of
-`firestore.rules`. The dashboard never queries the database: a build step reads
-with a credential and ships a static file. Nothing that can read the database is
-ever served to a visitor.
+### Setup (one time, free tier)
 
-The page makes **no third-party requests at all** — no CDN, no tile server, no
-font host, no analytics on the analytics. The world map is inline SVG baked into
-`js/world.js`; the charts are hand-built SVG.
+1. [Authentication → Get started](https://console.firebase.google.com/project/remidsp-98208/authentication/providers),
+   enable the **Google** provider, save.
+2. [Authentication → Settings → Authorized domains](https://console.firebase.google.com/project/remidsp-98208/authentication/settings)
+   → **Add domain** → `frankawesome.github.io`.
 
----
-
-## Refreshing
-
-Automatic: `.github/workflows/refresh.yml` runs daily at 05:17 UTC, and on
-demand from the Actions tab.
-
-By hand, using your own `firebase login`:
-
-```bash
-REMI_DASH_PASSPHRASE='…' python3 tools/export.py
-```
-
-To read the numbers locally without encrypting anything:
-
-```bash
-python3 tools/export.py --no-encrypt --plain /tmp/metrics.json
-```
-
-`--days N` limits the window. `data/metrics.json` is gitignored so a plaintext
-dump cannot be committed by accident.
+The sign-in screen detects both of these being missing and shows the steps
+inline, so you do not have to come back here for them.
 
 ---
 
-## The credential
+## The command line
 
-The workflow authenticates as `remi-dashboard-reader@remidsp-98208.iam.gserviceaccount.com`,
-which holds exactly `roles/datastore.viewer` on the analytics project. It cannot
-write to Firestore (verified), cannot reach any other project, and can be
-revoked on its own.
+`tools/export.py` is no longer in the dashboard's path, and is kept for two
+jobs that still matter: getting the numbers without a browser, and being the
+**reference implementation** of the classification and aggregation rules.
 
-This matters: the credential the firebase CLI holds is a Google **refresh token
-for your whole account**, valid until revoked. That belongs on your laptop, not
-in a repo secret.
+```bash
+python3 tools/export.py                # -> data/metrics.json (gitignored)
+python3 tools/export.py --days 30      # only the last month
+```
 
-Recreate it with `python3 tools/setup_service_account.py`.
+It authenticates with your own `firebase login`, or with `REMI_SA_KEY` for a
+read-only service account (`tools/setup_service_account.py` creates one holding
+exactly `roles/datastore.viewer`; it cannot write, verified).
 
-### Secrets
+**`js/aggregate.js` is a line-for-line port of `export.py`** and is verified to
+produce byte-identical output over the same documents. If you change a rule in
+one, change it in the other. Two differences that were found by that check and
+are worth not reintroducing:
 
-| name | what |
-|---|---|
-| `REMI_SA_KEY` | the service account JSON |
-| `REMI_DASH_PASSPHRASE` | what the page asks for |
-
-Rotating the passphrase is one `gh secret set` plus one workflow run — the salt
-travels inside the file, so nothing in the page needs changing.
+- Hour-of-day uses `hourCycle:"h23"`, not `hour12:false` — the latter resolves
+  to h24 in several engines and renders midnight as "24", dropping it.
+- Ranked lists break ties by **code point**, not `localeCompare` — locale
+  collation is case-insensitive and would order `other` before `Safari` in one
+  implementation and after it in the other.
 
 ---
 
@@ -94,12 +89,13 @@ travels inside the file, so nothing in the page needs changing.
 ```
 index.html              the page
 css/dash.css            the site's design system, pointed at data
-js/dash.js              fetch → unlock → render
-js/crypto.js            WebCrypto unlock
+js/live.js              Firebase auth + Firestore subscriptions
+js/aggregate.js         classification + aggregation (port of export.py)
+js/dash.js              subscribe → aggregate → render
 js/charts.js            SVG charts, no library
 js/map.js               world map
-js/world.js             GENERATED — country paths
-tools/export.py         Firestore + GitHub → encrypted JSON
+js/world.js             GENERATED — country paths + centroids
+tools/export.py         the same numbers, on the command line
 tools/build_world.py    regenerates world.js and centroids.py
 tools/setup_service_account.py
 ```
@@ -117,25 +113,24 @@ is committed.
 - **A download row is a click** on the installer link, not a completed transfer.
 - **Coordinates start 2026-07-29.** Earlier rows are placed at their country's
   centroid and drawn hollow and dashed. A dot meaning "somewhere in Canada" is
-  never given a city name — see the `places` grouping in `export.py`.
+  never given a city name — see the `places` grouping.
 - **Engagement starts 2026-07-29.** Before that, `dwellMs` and `maxScroll` do
   not exist, so those tiles read zero for older windows.
 - **`human` means no automation signals**, not a verified person.
 - **`self` is your *city*, localhost, or a denylisted test session** —
-  `HOME_CITIES` in `export.py`. It was a whole country (`{"ZA"}`) until
-  2026-07-29, which swallowed the friends in Pretoria and Johannesburg who
-  actually downloaded the plugin: human downloads read 1 when the true figure
-  was 3. A country is not one person.
+  `HOME_CITIES`. It was a whole country (`{"ZA"}`) until 2026-07-29, which
+  swallowed the friends in Pretoria and Johannesburg who actually downloaded
+  the plugin: human downloads read 1 when the true figure was 3. A country is
+  not one person.
 
   The cost of city-level attribution is that **anyone else in Cape Town is
-  still counted as you**. On the data as of 2026-07-29 that is roughly two
-  sessions and one download — a macOS 1728×1117 machine that has never
-  appeared on localhost. If that ever matters more than the convenience,
-  narrow `self` to a device allowlist instead; the fingerprints that have
-  browsed localhost are provably yours.
+  still counted as you** — roughly two sessions and one download in the data as
+  of 2026-07-29. If that ever matters more than the convenience, narrow `self`
+  to a device allowlist; the fingerprints that have browsed localhost are
+  provably yours.
 - **Verdicts are ordered: certainty, then evidence, then geography.** Location
-  is checked *last*. It used to be checked first, which meant a crawler that
-  resolved to your own city was filed as you and never tested for automation —
-  that is how a burst of link-preview bots (triggered by a friend sharing the
-  URL in Microsoft Teams) was counted as you browsing your own site.
+  is checked *last*. It used to be first, which meant a crawler resolving to
+  your own city was filed as you and never tested for automation — that is how
+  a burst of link-preview bots, triggered by a friend sharing the URL in
+  Microsoft Teams, was counted as you browsing your own site.
 - Site analytics start 2026-07-17; releases predate them.

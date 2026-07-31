@@ -1,55 +1,103 @@
 /* ══════════════════════════════════════════════════════════════
    REMI DSP — dashboard
 
-   Fetch the encrypted metrics, unlock them, render. Every scope (human /
-   automated / self / all) is present in the one decrypted payload, so the
-   scope switch is a re-render over data already in memory — no refetch, no
-   spinner, no second decrypt.
+   Sign in, subscribe to Firestore, aggregate, render. There is no build step
+   and no snapshot file: a download appears here the moment the row lands.
+
+   Every scope (human / automated / self / all) is computed from the same
+   in-memory documents, so the scope switch is a re-render over data already
+   held — no refetch, no spinner, no second read billed.
    ══════════════════════════════════════════════════════════════ */
 
-import { decrypt, remember, recall, forget } from "./crypto.js";
+import { watchAuth, signIn, leave, subscribe, fetchReleases,
+         describeAuthError, GH_REPO } from "./live.js";
+import { aggregate, buildReleases } from "./aggregate.js";
 import { bars, spark, timeseries, hours, tooltip, fmt, led, pct, duration }
   from "./charts.js";
 import { drawMap } from "./map.js";
 
-const DATA = "data/metrics.enc.json";
 const $ = id => document.getElementById(id);
 
 let metrics = null;
+let releases = { repo: GH_REPO, total: 0, macos: 0, windows: 0, other: 0,
+                 current: null, byRelease: [] };
+let raw = null;
 let scope = "human";
 let mapMetric = "downloads";
 let tip = null;
+let unsubscribe = null;
+let lastUpdate = null;
 
-/* ── unlock ─────────────────────────────────────────────────── */
+const esc = s => String(s ?? "").replace(/[&<>"]/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-async function loadBlob() {
-  // cache:no-store — a stale dashboard is worse than a slow one, and the file
-  // is small enough that revalidating costs nothing.
-  const r = await fetch(DATA, { cache: "no-store" });
-  if (!r.ok) throw new Error(`could not load metrics (HTTP ${r.status})`);
-  return r.json();
+const when = ts => {
+  const d = new Date(ts);
+  return isNaN(d) ? "—" : d.toLocaleString("en-GB",
+    { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+};
+
+/* ── gate ───────────────────────────────────────────────────── */
+
+function showGate({ message = "", setup = false } = {}) {
+  $("lock").hidden = false;
+  $("app").hidden = true;
+  $("lockErr").textContent = message;
+  $("lockSetup").hidden = !setup;
 }
 
-async function unlock(passphrase, { quiet = false } = {}) {
-  const err = $("lockErr");
-  err.textContent = "";
-  try {
-    const blob = await loadBlob();
-    metrics = await decrypt(blob, passphrase);
-  } catch (e) {
-    // A failed GCM tag and a missing file are different problems and deserve
-    // different words — "wrong passphrase" when the file 404s sends you
-    // hunting for the wrong thing entirely.
-    const missing = /could not load/i.test(e.message || "");
-    if (!quiet) err.textContent = missing ? e.message : "Passphrase not accepted";
-    if (missing) err.textContent = e.message;
-    return false;
-  }
-  remember(passphrase);
+function showApp() {
   $("lock").hidden = true;
   $("app").hidden = false;
+}
+
+$("signIn").addEventListener("click", async () => {
+  $("lockErr").textContent = "";
+  try {
+    await signIn();
+  } catch (e) {
+    showGate(describeAuthError(e));
+  }
+});
+
+$("lockBtn").addEventListener("click", () => leave());
+
+/* ── data ───────────────────────────────────────────────────── */
+
+watchAuth(user => {
+  if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+
+  if (!user) {
+    metrics = null;
+    showGate();
+    return;
+  }
+
+  $("lockErr").textContent = "Loading…";
+
+  // Releases come from the public GitHub API and change rarely; one fetch per
+  // sign-in is plenty and costs one of the 60/hour anonymous requests.
+  fetchReleases()
+    .then(r => { releases = buildReleases(r, GH_REPO); if (raw) rebuild(); })
+    .catch(() => { /* the site numbers are still worth showing without it */ });
+
+  unsubscribe = subscribe(
+    (data, meta) => {
+      raw = data;
+      lastUpdate = new Date();
+      showApp();
+      rebuild(meta);
+    },
+    err => showGate(describeAuthError(err)),
+  );
+});
+
+function rebuild(meta = {}) {
+  metrics = aggregate(raw, releases);
   render();
-  return true;
+  $("liveDot").dataset.state = meta.fromCache ? "cache" : "live";
+  $("liveText").textContent = meta.fromCache
+    ? "CACHED" : `LIVE · ${lastUpdate.toLocaleTimeString("en-GB")}`;
 }
 
 /* ── render ─────────────────────────────────────────────────── */
@@ -60,14 +108,9 @@ function render() {
   const rel = m.releases;
   const v = m.sessionVerdicts;
 
-  // ── chrome ──
   const w = m.window;
   $("mWindow").textContent = w.first
     ? `${w.first} → ${w.last} · ${w.days} DAYS` : "NO DATA";
-  $("mGenerated").textContent = new Date(m.generated)
-    .toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
-  $("mFooter").textContent =
-    `${fmt(v.total)} sessions classified · built ${m.generated}`;
 
   for (const b of document.querySelectorAll("#scope button")) {
     const key = b.dataset.scope;
@@ -81,9 +124,10 @@ function render() {
 
   // ── 01 headline ──
   $("kRelease").textContent = led(rel.total);
-  $("kReleaseNote").innerHTML =
-    `GitHub release assets — <b>${fmt(rel.macos)}</b> macOS · <b>${fmt(rel.windows)}</b> Windows. `
-    + `Every fetch from any source, all scopes, since ${rel.byRelease.at(-1)?.published ?? "—"}.`;
+  $("kReleaseNote").innerHTML = rel.byRelease.length
+    ? `GitHub release assets — <b>${fmt(rel.macos)}</b> macOS · <b>${fmt(rel.windows)}</b> Windows. `
+      + `Every fetch from any source, all scopes, since ${rel.byRelease.at(-1)?.published ?? "—"}.`
+    : "GitHub release counts unavailable right now.";
 
   const t = s.totals;
   $("kDownloads").textContent = led(t.downloads);
@@ -169,24 +213,11 @@ function render() {
       <td><span class="tag ${d.verdict === "human" ? "tag--human" : ""}">${esc(d.verdict)}</span></td>
     </tr>`).join("")
     : `<tr><td colspan="6"><p class="empty">no downloads in this scope</p></td></tr>`;
+
+  $("mFooter").textContent = `${fmt(v.total)} sessions classified · live from Firestore`;
 }
 
-const esc = s => String(s ?? "").replace(/[&<>"]/g,
-  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-
-const when = ts => {
-  const d = new Date(ts);
-  return isNaN(d) ? "—" : d.toLocaleString("en-GB",
-    { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
-};
-
 /* ── wiring ─────────────────────────────────────────────────── */
-
-$("lockForm").addEventListener("submit", e => {
-  e.preventDefault();
-  const pp = $("pp").value;
-  if (pp) unlock(pp);
-});
 
 $("scope").addEventListener("click", e => {
   const b = e.target.closest("button[data-scope]");
@@ -202,17 +233,8 @@ $("mapMetric").addEventListener("click", e => {
   render();
 });
 
-$("lockBtn").addEventListener("click", () => {
-  forget();
-  location.reload();
-});
+// The authorized-domain step needs the exact host, and it differs between
+// localhost and Pages — so read it off the page rather than hardcoding it.
+$("thisHost").textContent = location.hostname;
 
 tip = tooltip();
-
-/* Re-unlock silently on reload while the tab lives. quiet:true so a passphrase
-   that has stopped working (data re-encrypted under a new one) drops you back
-   to the lock screen with a clean field rather than a stale error. */
-const saved = recall();
-if (saved) {
-  unlock(saved, { quiet: true }).then(ok => { if (!ok) forget(); });
-}

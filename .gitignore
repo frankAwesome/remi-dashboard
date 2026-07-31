@@ -1,11 +1,17 @@
-# Plaintext metrics must never be committed — the whole point is that the host
-# only ever sees ciphertext.
+# The plaintext CLI output. Not secret in the way it used to be — the dashboard
+# no longer serves it — but there is no reason to commit a snapshot of a live
+# dashboard, and every reason not to publish visitor rows in a public repo.
 data/metrics.json
 *.plain.json
+*.enc.json
 
 # Cached Natural Earth source for tools/build_world.py (~800 KB); the generated
 # js/world.js and tools/centroids.py are committed instead.
 tools/.ne110m.geojson
+
+# Scratch from the aggregate.js ≡ export.py equivalence check.
+eq-tmp/
+eq-test.html
 
 .DS_Store
 __pycache__/

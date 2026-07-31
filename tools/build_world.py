@@ -174,7 +174,15 @@ def main():
         for c in countries:
             f.write('  {id:"%s",name:%s,d:"%s"},\n'
                     % (c["id"], json.dumps(c["name"]), c["d"]))
-        f.write("];\n")
+        f.write("];\n\n")
+        f.write("/* Area centroid of each country's largest landmass. Places rows whose geo\n"
+                "   lookup returned no coordinates; those pins are drawn hollow and dashed\n"
+                "   and never carry a city name. Mirrors tools/centroids.py exactly. */\n")
+        f.write("export const CENTROIDS = {\n")
+        for iso in sorted(centroids):
+            lat, lon = centroids[iso]
+            f.write('  %s:[%s,%s],\n' % (iso, lat, lon))
+        f.write("};\n")
 
     py = os.path.join(HERE, "centroids.py")
     with open(py, "w") as f:

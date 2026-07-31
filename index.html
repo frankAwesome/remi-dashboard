@@ -27,17 +27,38 @@
       <span>REMI DSP</span>
     </div>
     <h1>Metrics</h1>
-    <p>This page is served from a public host. The numbers behind it are not —
-       they arrive encrypted and are opened here, in this tab.</p>
-    <form class="lock__row" id="lockForm">
-      <input id="pp" type="password" placeholder="PASSPHRASE" autocomplete="current-password"
-             autofocus spellcheck="false" aria-label="Passphrase">
-      <button class="lock__go" type="submit">Unlock</button>
-    </form>
+    <p>Live from Firestore. This page is served from a public host; the data
+       is not public — reading it needs your account, checked server-side on
+       every query.</p>
+
+    <button class="lock__google" id="signIn" type="button">
+      <svg viewBox="0 0 48 48" width="17" height="17" aria-hidden="true">
+        <path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-2.7-.4-3.9H24v7.1h12.1c-.2 1.8-1.6 4.5-4.5 6.3l6.9 5.4c4.1-3.8 6.6-9.4 6.6-14.9z"/>
+        <path fill="#34A853" d="M24 46c5.9 0 10.9-2 14.5-5.3l-6.9-5.4c-1.9 1.3-4.4 2.2-7.6 2.2-5.8 0-10.7-3.8-12.5-9.1l-7.1 5.5C8.1 41.1 15.4 46 24 46z"/>
+        <path fill="#FBBC05" d="M11.5 28.4c-.5-1.4-.7-2.9-.7-4.4s.3-3 .7-4.4l-7.1-5.5C2.9 17 2 20.4 2 24s.9 7 2.4 9.9l7.1-5.5z"/>
+        <path fill="#EA4335" d="M24 10.5c4.1 0 6.9 1.8 8.5 3.3l6.1-6C34.9 4.4 29.9 2 24 2 15.4 2 8.1 6.9 4.4 14.1l7.1 5.5c1.8-5.3 6.7-9.1 12.5-9.1z"/>
+      </svg>
+      Sign in with Google
+    </button>
+
     <p class="lock__err" id="lockErr" role="alert"></p>
+
+    <div class="lock__setup" id="lockSetup" hidden>
+      <p><strong>One-time setup, in the Firebase console:</strong></p>
+      <ol>
+        <li><a href="https://console.firebase.google.com/project/remidsp-98208/authentication/providers"
+               target="_blank" rel="noopener">Authentication → Get started</a>,
+            then enable the <strong>Google</strong> provider and save.</li>
+        <li><a href="https://console.firebase.google.com/project/remidsp-98208/authentication/settings"
+               target="_blank" rel="noopener">Authentication → Settings → Authorized domains</a>
+            → <strong>Add domain</strong> → <code id="thisHost">…</code></li>
+      </ol>
+      <p>Then reload this page and sign in. Free tier — no billing needed.</p>
+    </div>
+
     <p class="lock__note">
-      AES-256-GCM · PBKDF2-SHA256 · decrypted in-browser<br>
-      The passphrase is never sent anywhere, and is forgotten when this tab closes.
+      Reads are granted to one verified Google account and refused for everyone
+      else, by <code>firestore.rules</code> — not by this page.
     </p>
   </div>
 </div>
@@ -61,7 +82,7 @@
     <div class="nav__spacer"></div>
     <p class="nav__meta">
       <b id="mWindow">—</b><br>
-      built <span id="mGenerated">—</span>
+      <span class="livedot" id="liveDot" data-state="live"></span><span id="liveText">CONNECTING…</span>
     </p>
   </div>
 </nav>
@@ -273,6 +294,8 @@
         it is the one that saw the bytes move.</li>
     <li>Site analytics start 2026-07-17; releases predate them. Coordinates start
         2026-07-29 — earlier rows sit on their country centroid.</li>
+    <li>This page reads Firestore live — every figure above is current as of the
+        timestamp in the header, not a nightly snapshot.</li>
     <li><em>Human</em> means no automation signals, not a verified person.
         <em>Mine</em> is Cape Town, localhost or a test session — so anyone else
         in Cape Town is counted as you. Elsewhere in South Africa is not.</li>
